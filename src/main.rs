@@ -1,51 +1,94 @@
 #![feature(slice_from_ptr_range)]/*shader*/#![allow(non_upper_case_globals,non_camel_case_types)]
-use ui::{Result, new_trigger, run_with_trigger, size, xy, int2, vector::vec2, Widget, EventContext, Event, vulkan, shader};
+use ui::{Result, run, size, xy, int2, vector::vec2, Widget, EventContext, Event, vulkan, shader, image::{rgb, rgbf}};
 use vulkan::{Context, Commands, Arc, ImageView, PrimitiveTopology, from_iter, BufferUsage, buffer};
 shader!{square}
 
 struct App {
 	state: Vec<Vec<int2>>,
+	colors: Vec<rgbf>,
+	subfall: f32,
 }
 
 const screen: int2 = xy{x: 3840, y: 2160};
 const square_side: i32 = 48;
 const grid: int2 = xy{x: screen.x/square_side/4+1/*=21*/, y: screen.y/square_side/*=45*/};
-impl App { fn new() -> Self { Self{state: vec![vec![xy{x: 10, y: 44}]]} } }
-
 impl App {
-fn event(&mut self, /*_: &Context, _: &mut Commands, _: size, _: &mut EventContext,*/ event: &Event) -> Result<bool> {
-	let Self{state} = self;
-	let d = match event {
-		Event::Key('←') => { xy{x: -1, y: 0}}
-		Event::Key('→') => { xy{x: 1, y: 0}}
-		Event::Key('↓') => { xy{x: 0, y: -1}}
-		_ => { return Ok(false); }
-	};
-	let current_block = state.last().unwrap();
-	for &xy{x,y} in current_block {
-		if d.y < 0 && y == 0 { return Ok(false); }
-		if d.x < 0 && x == 0 { return Ok(false); }
-		if d.x > 0 && x == grid.x-1 { return Ok(false); }
-		let next = xy{x: x+d.x, y: y+d.y};
-		for block in &state[0..state.len()-1] { for square in block { if &next == square { return Ok(false); } } }
+	fn new() -> Self { let mut s = Self{state: Vec::new(), colors: Vec::new(), subfall: 0.}; s.spawn(); s }
+	fn spawn(&mut self) {
+		let Self{state, colors, subfall} = self;
+		let patterns = [
+			vec![xy{x: 0, y: 0}],
+			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 0, y: 2},xy{x: 0, y: 3}]
+		];
+		state.push(patterns[rand::random_range(0..2)].iter().map(|xy{x,y}| xy{x: x+10, y: y+44}).collect());
+		let possible_colors = vec![rgb{r:1.,g:0.,b:0.},rgb{r:0.,g:1.,b:0.},rgb{r:0.,g:0.,b:1.}];
+		colors.push(possible_colors[(state.len()-1)%possible_colors.len()]);
+		*subfall = 0.;
 	}
-	let current_block = state.last_mut().unwrap();
-	for square in current_block { *square += d; }
-	//println!("{state:?}");
-	Ok(true)
-}}
+	fn move_current_block(&mut self, d: int2) -> bool {
+		let Self{state, ..} = self;
+		let current_block = state.last().unwrap();
+		for &xy{x,y} in current_block {
+			if d.y < 0 && y == 0 { return false; }
+			if d.x < 0 && x == 0 { return false; }
+			if d.x > 0 && x == grid.x-1 { return false; }
+			let next = xy{x: x+d.x, y: y+d.y};
+			for block in &state[0..state.len()-1] { for square in block { if &next == square { return false; } } }
+		}
+		let current_block = state.last_mut().unwrap();
+		for square in current_block { *square += d; }
+		let any_column_full_up_to = |query| {
+			for &query in query {
+				let column_full_up_to = |xy{x,y}| {
+					for y in 0..y { // any hole
+						let filled = |query| {
+							for block in &*state { for &square in block { if square == query  { return true; } } }
+							false
+						};
+						if !filled(xy{x,y}) { return false; } // hole
+					}
+					true // no holes
+				};
+				if column_full_up_to(query) { return true; } // any full
+			}
+			false // no full
+		};
+		if any_column_full_up_to(state.last().unwrap()) { // touch
+			self.spawn()
+		}
+		true
+	}
+}
 
 impl Widget for App {
-fn event(&mut self, _: &Context, _: &mut Commands, _: size, _: &mut EventContext, event: &Event) -> Result<bool> { Ok(matches!(event, Event::Trigger)) }
+fn event(&mut self, _: &Context, _: &mut Commands, _: size, _: &mut EventContext, event: &Event) -> Result<bool> {
+	Ok(match event {
+		Event::Idle => { true } // Autofall
+		Event::Key('←'|'a') => { self.move_current_block(xy{x: -1, y: 0}) }
+		Event::Key('→'|'d') => { self.move_current_block(xy{x: 1, y: 0}) }
+		Event::Key('↓'|' ') => { self.move_current_block(xy{x: 0, y: -1}) }
+		_ => { false }
+	})
+}
 fn paint(&mut self, context: &Context, commands: &mut Commands, target: Arc<ImageView>, _: size, _: int2) -> Result {
-	let Self{state} = self;
-	let ref quads = state.iter().map(|block| block.iter().map(|&square| {
-		let side = square_side as f32;
-		let center = xy{x: screen.x as f32/2.-grid.x as f32*side/2., y: side/2.} + side*vec2::from(square);
+	let Self{subfall,..} = self;
+	let side = square_side as f32;
+	*subfall += side/60./2.;
+	if *subfall > 1. {
+		*subfall -= 1.;
+		self.move_current_block(xy{x: 0, y: -1});
+	}
+	let Self{state,colors,subfall} = self;
+	let square_to_quad = |&square, color:&rgbf, subfall| {
+		let center = xy{x: screen.x as f32/2.-grid.x as f32*side/2., y: side/2.+subfall} + side*vec2::from(square);
 		let xy{x,y} = xy::from(side/2.);
-		[center+xy{x: -x, y: -y},center+xy{x: -x, y},center+xy{x, y},center+xy{x, y: -y}].map(|p| 2.*p/vec2::from(screen)-vec2::from(1.))
-	})).flatten().flatten().collect::<Box<_>>();
-	let vertices = from_iter(context, BufferUsage::VERTEX_BUFFER, quads.into_iter().map(|&xy{x,y}| square::Vertex{position: [x,y]}))?;
+		[center+xy{x: -x, y: -y},center+xy{x: -x, y},center+xy{x, y},center+xy{x, y: -y}].map(|p| (2.*p/vec2::from(screen)-vec2::from(1.), *color))
+	};
+	let mut quads = Vec::new();
+	for (i, (block, color)) in state.iter().zip(colors).enumerate() {
+		for square in block { quads.extend(square_to_quad(square, color, if i==state.len()-1 {*subfall} else {0.})); }
+	}
+	let vertices = from_iter(context, BufferUsage::VERTEX_BUFFER, quads.iter().map(|&(xy{x,y}, rgb{r,g,b})| square::Vertex{position: [x,y], color: [r,g,b]}))?;
 	let indices = buffer(context, BufferUsage::INDEX_BUFFER, quads.len()/4*6)?;
 	{
 		let mut indices = indices.write()?;
@@ -68,58 +111,4 @@ fn paint(&mut self, context: &Context, commands: &mut Commands, target: Arc<Imag
 }
 }
 
-use std::sync::{Mutex, MutexGuard};
-#[derive(Default,Clone)] struct Arch<T>(Arc<Mutex<T>>);
-impl<T> Arch<T> {
-    pub fn new(inner: T) -> Self { Self(std::sync::Arc::new(Mutex::new(inner))) }
-	pub fn clone(&self) -> Self { Self(self.0.clone()) }
-    pub fn lock(&self) -> MutexGuard<'_, T> { self.0.lock().unwrap() }
-}
-unsafe impl<T> Send for Arch<T> {}
-unsafe impl<T> Sync for Arch<T> {}
-impl<T:Widget> Widget for Arch<T> {
-	fn paint(&mut self, context: &Context, commands: &mut Commands, target: Arc<ImageView>, size: size, offset: int2) -> Result {
-		self.lock().paint(context, commands, target, size, offset) }
-	fn event(&mut self, context: &Context, commands: &mut Commands, size: size, event_context: &mut EventContext, event: &Event) -> Result<bool> {
-		self.lock().event(context, commands, size, event_context, event) }
-}
-
-fn main() -> Result {
-	let app : Arch<App> = Arch::new(App::new());
-	use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-	let stop = AtomicBool::new(false);
-	let stop = &stop;
-	let trigger = new_trigger()?;
-	let trigger = &trigger;
-	std::thread::scope(|s| {
-		std::thread::Builder::new().spawn_scoped(s, {let app : Arch<App> = Arch::clone(&app); move || /*Result::<()>::unwrap(try*/ {
-			let fd = rustix::fs::open("/dev/input/event21", rustix::fs::OFlags::RDONLY, rustix::fs::Mode::empty()).unwrap();
-			#[repr(C)] #[derive(Clone, Copy, Debug)] struct timeval { sec: i64, usec: i64 }
-			#[repr(C)] #[derive(Clone, Copy, Debug)] struct input_event { time: timeval, r#type: u16, code: u16, value: i32 }
-			unsafe impl bytemuck::Zeroable for input_event {}
-			unsafe impl bytemuck::Pod for input_event {}
-			while !stop.load(Relaxed) {
-				let mut buffer = [0; std::mem::size_of::<input_event>()];
-				assert_eq!(rustix::io::read(&fd, &mut buffer).unwrap(), buffer.len());
-			 	let input_event{r#type, code, value, ..} = *bytemuck::from_bytes(&buffer);
-				const SYN : u16 = 0; const KEY : u16 = 1; const REL : u16 = 2; const ABS : u16 = 3;
-				match r#type {
-					SYN => {},
-					ABS => {
-						const X : u16 = 0; const Y : u16 = 1;
-						let d = {
-							if value < -4096 { match code {X => '←', Y => '↑',_=>{continue;}} }
-							else if value > 4096 { match code {X => '→', Y => '↓',_=>{continue;}} }
-							else { continue; }
-						};
-						if app.lock().event(&Event::Key(d)).unwrap() { ui::trigger(trigger).unwrap(); }
-					}
-					_ => unreachable!("{type}")
-				}
-			}
-		}})?;
-		let r = run_with_trigger(trigger, "tetris", Box::new(|_,_| Ok(Box::new(app))));
-		stop.store(true, Relaxed);
-		r
-	})
-}
+fn main() -> Result { run("tetris", Box::new(|_,_| Ok(Box::new(App::new())))) }
