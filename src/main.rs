@@ -17,10 +17,26 @@ impl App {
 	fn spawn(&mut self) {
 		let Self{state, colors, subfall} = self;
 		let patterns = [
-			vec![xy{x: 0, y: 0}],
-			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 0, y: 2},xy{x: 0, y: 3}]
+			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 0},xy{x: 1, y: 1}], // O
+			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 0, y: 2},xy{x: 0, y: 3}], // |
+			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 1},xy{x: 0, y: 2}], // |-
+			vec![xy{x: 0, y: 0},xy{x: -1, y: 1},xy{x: 0, y: 1},xy{x: 0, y: 2}], // -|
+			vec![xy{x: -1, y: 0},xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 0}], // _|_
+			vec![xy{x: -1, y: 0},xy{x: 0, y: 0},xy{x: 0, y: -1},xy{x: 1, y: 0}], // T
+			vec![xy{x: -1, y: 0},xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 1}], // _,-
+			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 1},xy{x: 1, y: 2}], // /-'
+			vec![xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: -1, y: 1},xy{x: -1, y: 2}], // '-\
+			vec![xy{x: 1, y: 0},xy{x: 0, y: 0},xy{x: 0, y: 1},xy{x: -1, y: 1}], // -\_
+			vec![xy{x: -1, y: 0},xy{x: -1, y: 1},xy{x: 0, y: 0},xy{x: 1, y: 0}], // |__
+			vec![xy{x: -1, y: 0},xy{x: 1, y: 1},xy{x: 0, y: 0},xy{x: 1, y: 0}], // __|
+			vec![xy{x: -1, y: 1},xy{x: 1, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 1}], // ^^|
+			vec![xy{x: -1, y: 1},xy{x: -1, y: 0},xy{x: 0, y: 1},xy{x: 1, y: 1}], // |^^
+			vec![xy{x: 0, y: 0},xy{x: 1, y: 1},xy{x: 0, y: 1},xy{x: 0, y: 2}], // |_
+			vec![xy{x: 1, y: 2},xy{x: 1, y: 1},xy{x: 0, y: 0},xy{x: 1, y: 0}], // _|
+			vec![xy{x: 0, y: 2},xy{x: 1, y: 2},xy{x: 0, y: 1},xy{x: 0, y: 0}], // |^
+			vec![xy{x: 1, y: 2},xy{x: 0, y: 2},xy{x: 1, y: 1},xy{x: 1, y: 0}], // ^|
 		];
-		state.push(patterns[rand::random_range(0..2)].iter().map(|xy{x,y}| xy{x: x+10, y: y+44}).collect());
+		state.push(patterns[if true { rand::random_range(0..patterns.len()) } else { state.len()%patterns.len() }].iter().map(|xy{x,y}| xy{x: x+10, y: y+44}).collect());
 		let possible_colors = vec![rgb{r:1.,g:0.,b:0.},rgb{r:0.,g:1.,b:0.},rgb{r:0.,g:0.,b:1.}];
 		colors.push(possible_colors[(state.len()-1)%possible_colors.len()]);
 		*subfall = 0.;
@@ -37,23 +53,18 @@ impl App {
 		}
 		let current_block = state.last_mut().unwrap();
 		for square in current_block { *square += d; }
-		let any_column_full_up_to = |query| {
-			for &query in query {
-				let column_full_up_to = |xy{x,y}| {
-					for y in 0..y { // any hole
-						let filled = |query| {
-							for block in &*state { for &square in block { if square == query  { return true; } } }
-							false
-						};
-						if !filled(xy{x,y}) { return false; } // hole
-					}
-					true // no holes
+		let touches_at_any_column = |block| {
+			for &square in block {
+				let column_touch = |xy{x,y}| {
+					if y == 0 { return true; }
+					for block in &state[0..state.len()-1] { for &square in block { if square == (xy{x,y:y-1}) { return true; } } }
+					false
 				};
-				if column_full_up_to(query) { return true; } // any full
+				if column_touch(square) { return true; }
 			}
-			false // no full
+			false
 		};
-		if any_column_full_up_to(state.last().unwrap()) { // touch
+		if touches_at_any_column(state.last().unwrap()) {
 			self.spawn()
 		}
 		true
